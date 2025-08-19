@@ -4,12 +4,17 @@ import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
+import jdk.jfr.consumer.RecordedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.blockhound.BlockHound;
 import reactor.blockhound.BlockingOperationError;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
 
@@ -32,19 +37,9 @@ public class UndertowBlockHoundSelfHealing {
                     });
 
     public static void main(String[] args) {
-        // Install BlockHound:
-        // - Mark Undertow I/O threads (XNIO-*) as non-blocking.
-        // - CommonPool workers are non-blocking by default via BlockHound.
-        BlockHound.install(builder -> {
-            builder.nonBlockingThreadPredicate(current ->   // `current` is the default Predicate<Thread>
-                    current.or(t -> t.getName().startsWith("XNIO-")) // Return a new Predicate<Thread>
-            );
-            // Allow Undertow's/XNIO's worker threads to block internally.
-            // This is part of their normal operation and prevents the false-positive
-            // error you are seeing during startup.
-            builder.allowBlockingCallsInside("org.xnio.nio.WorkerThread", "run");
 
-        });
+        try (var jfr = JfrPinningProbe.start()) {
+            log.info("Starting JFR Probing");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("Shutting down thread pools...");
@@ -67,6 +62,13 @@ public class UndertowBlockHoundSelfHealing {
 
         server.start();
         log.info("Server started on http://localhost:8080");
+
+        if(jfr.hasPinningEvents()){
+            jfr.printPinningEvents();
+        }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // ------- Router -------
